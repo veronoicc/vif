@@ -1,6 +1,6 @@
 use std::{collections::HashMap, time::Duration};
 
-use axum::{Json, Router, body::Body, extract::State, http::Response, response::IntoResponse, routing::post};
+use axum::{Json, Router, body::Body, extract::State, http::{HeaderValue, Response}, response::IntoResponse, routing::post};
 use brest::Brest;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
@@ -51,7 +51,7 @@ async fn post_handler(
         Ok(results) => results,
         Err(IndexError::Embedding(EmbeddingError::Ratelimit(retry_after))) => {
             let mut response = Brest::<(), ()>::fail_status("Please try again later!", StatusCode::TOO_MANY_REQUESTS).into_response();
-            response.headers_mut().insert(reqwest::header::RETRY_AFTER, retry_after.as_secs().into());
+            response.headers_mut().insert(reqwest::header::RETRY_AFTER, HeaderValue::from_str(&retry_after).unwrap());
             return response
         }
         Err(e) => return  Brest::<(), ()>::error(format!("An error occured: {e:?}")).into_response(),

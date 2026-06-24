@@ -1,11 +1,11 @@
-use std::time::Duration;
-
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use chrono::{Datelike, Duration, TimeZone as _, Utc};
+use chrono_tz::US::Pacific;
 use qdrant_client::qdrant::{Distance, VectorParams, VectorParamsBuilder};
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 use thiserror::Error;
 
 use crate::config::EmbeddersGeminiConfig;
@@ -19,7 +19,7 @@ pub enum EmbeddingError {
     #[error("download media error: {0}")]
     DownloadMedia(String),
     #[error("ratelimited, retry after: {0:?}")]
-    Ratelimit(Duration),
+    Ratelimit(String),
 }
 
 #[async_trait]
@@ -44,6 +44,16 @@ struct GeminiEmbedResponse {
 #[derive(Deserialize)]
 struct GeminiEmbedding {
     values: Vec<f32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeminiErrorEnvelope {
+    error: GeminiErrorBody,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeminiErrorBody {
+    details: Option<Vec<Value>>,
 }
 
 #[async_trait]
@@ -131,15 +141,15 @@ impl GeminiEmbedder {
         let response = client.post(url).json(body).send().await?;
 
         if response.status() == StatusCode::TOO_MANY_REQUESTS {
-            let retry_after = response
-                .headers()
-                .get(reqwest::header::RETRY_AFTER)
-                .and_then(|value| value.to_str().ok())
-                .and_then(|str_value| str_value.parse::<u64>().ok())
-                .map(Duration::from_secs)
-                .unwrap_or(Duration::from_secs(10));
-            return Err(EmbeddingError::Ratelimit(retry_after))
+            let error_text = response.text().await.unwrap_or_default();
+
+            let retry_after = parse_retry_after_from_429(
+                &error_text,
+            );
+
+            return Err(EmbeddingError::Ratelimit(retry_after));
         }
+
 
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or_default();
@@ -153,4 +163,61 @@ impl GeminiEmbedder {
 
         Ok(resp_data.embedding.values)
     }
+}
+
+fn parse_retry_after_from_429(
+    response_body: &str,
+) -> String {
+    if let Ok(envelope) = serde_json::from_str::<GeminiErrorEnvelope>(response_body) {
+        if let Some(details) = envelope.error.details {
+            let mut retry_delay: Option<String> = None;
+            let mut hit_daily_quota = false;
+
+            for detail in details {
+                let detail_type = detail.get("@type").and_then(Value::as_str);
+
+                if detail_type == Some("type.googleapis.com/google.rpc.QuotaFailure") {
+                    if let Some(violations) = detail.get("violations").and_then(Value::as_array) {
+                        for violation in violations {
+                            if let Some(quota_id) = violation.get("quotaId").and_then(Value::as_str) {
+                                if quota_id.contains("PerDay") {
+                                    hit_daily_quota = true;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if detail_type == Some("type.googleapis.com/google.rpc.RetryInfo") {
+                    if let Some(delay) = detail.get("retryDelay").and_then(Value::as_str) {
+                        let delay = delay.trim();
+                        if !delay.is_empty() {
+                            retry_delay = Some(delay.to_string());
+                        }
+                    }
+                }
+            }
+
+            if hit_daily_quota {
+                return seconds_until_next_pacific_midnight();
+            }
+
+            if let Some(delay) = retry_delay {
+                return delay;
+            }
+        }
+    }
+
+    "10".to_string()
+}
+
+fn seconds_until_next_pacific_midnight() -> String {
+    let now_pt = Utc::now().with_timezone(&Pacific);
+    let next_date = now_pt.date_naive() + Duration::days(1);
+    let next_midnight_pt = Pacific
+        .with_ymd_and_hms(next_date.year(), next_date.month(), next_date.day(), 0, 0, 0)
+        .single()
+        .expect("valid PT midnight");
+    let secs = (next_midnight_pt.timestamp() - now_pt.timestamp()).max(1);
+    secs.to_string()
 }
