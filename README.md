@@ -1,0 +1,1 @@
+# um yeah this is my gif search thing for now it only supports gemini embedding 2 and yeah

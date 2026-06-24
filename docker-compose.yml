@@ -1,0 +1,23 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: qdrant
+    restart: always
+    volumes:
+      - qdrant:/qdrant/storage
+
+  vif:
+    build: .
+    container_name: vif
+    restart: always
+    depends_on:
+      - qdrant
+    ports:
+      - "6335:6335"
+    environment:
+      - VIF_DATABASE_URL=http://qdrant:6334
+    volumes:
+      - ./config.toml:/app/config.toml
+
+volumes:
+  qdrant:
