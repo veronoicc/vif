@@ -1,0 +1,1 @@
+# note this is absolute ai slop bc idk tsx and wont learn it it works for me but i give no gurantees for anything
