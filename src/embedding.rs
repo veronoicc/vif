@@ -98,7 +98,9 @@ impl Embedder for GeminiEmbedder {
 
         let mime_type = infer::get(&media_bytes)
             .map(|info| info.mime_type())
-            .ok_or(EmbeddingError::DownloadMedia("Could not determine mime-type".to_string()))?;
+            .ok_or(EmbeddingError::DownloadMedia(
+                "Could not determine mime-type".to_string(),
+            ))?;
 
         let base64_data = BASE64.encode(&media_bytes);
 
@@ -112,7 +114,7 @@ impl Embedder for GeminiEmbedder {
             "content": {
                 "parts": [{
                     "inlineData": {
-                        "mimeType": mime_type, 
+                        "mimeType": mime_type,
                         "data": base64_data
                     }
                 }]
@@ -143,13 +145,10 @@ impl GeminiEmbedder {
         if response.status() == StatusCode::TOO_MANY_REQUESTS {
             let error_text = response.text().await.unwrap_or_default();
 
-            let retry_after = parse_retry_after_from_429(
-                &error_text,
-            );
+            let retry_after = parse_retry_after_from_429(&error_text);
 
             return Err(EmbeddingError::Ratelimit(retry_after));
         }
-
 
         if !response.status().is_success() {
             let error_text = response.text().await.unwrap_or_default();
@@ -165,9 +164,7 @@ impl GeminiEmbedder {
     }
 }
 
-fn parse_retry_after_from_429(
-    response_body: &str,
-) -> String {
+fn parse_retry_after_from_429(response_body: &str) -> String {
     if let Ok(envelope) = serde_json::from_str::<GeminiErrorEnvelope>(response_body) {
         if let Some(details) = envelope.error.details {
             let mut retry_delay: Option<String> = None;
@@ -179,7 +176,8 @@ fn parse_retry_after_from_429(
                 if detail_type == Some("type.googleapis.com/google.rpc.QuotaFailure") {
                     if let Some(violations) = detail.get("violations").and_then(Value::as_array) {
                         for violation in violations {
-                            if let Some(quota_id) = violation.get("quotaId").and_then(Value::as_str) {
+                            if let Some(quota_id) = violation.get("quotaId").and_then(Value::as_str)
+                            {
                                 if quota_id.contains("PerDay") {
                                     hit_daily_quota = true;
                                 }
@@ -215,7 +213,14 @@ fn seconds_until_next_pacific_midnight() -> String {
     let now_pt = Utc::now().with_timezone(&Pacific);
     let next_date = now_pt.date_naive() + Duration::days(1);
     let next_midnight_pt = Pacific
-        .with_ymd_and_hms(next_date.year(), next_date.month(), next_date.day(), 0, 0, 0)
+        .with_ymd_and_hms(
+            next_date.year(),
+            next_date.month(),
+            next_date.day(),
+            0,
+            0,
+            0,
+        )
         .single()
         .expect("valid PT midnight");
     let secs = (next_midnight_pt.timestamp() - now_pt.timestamp()).max(1);

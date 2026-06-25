@@ -23,7 +23,7 @@ import { Devs } from "@utils/constants";
 import { sleep } from "@utils/misc";
 import definePlugin, { OptionType } from "@utils/types";
 import { findByPropsLazy } from "@webpack";
-import { Forms, React, Slider, Text, useCallback, useEffect, useRef, UserStore, useState } from "@webpack/common";
+import { Button, Forms, React, Slider, Text, TextInput, useCallback, useEffect, useRef, UserStore, useState } from "@webpack/common";
 
 const favoriteGifsStore = findByPropsLazy("bW", "getCurrentValue");
 
@@ -102,8 +102,11 @@ function stripUrlParams(urlStr: string): string {
 
 // Fetch currently indexed links from the server
 async function fetchIndexedLinks(): Promise<Set<string>> {
+    const uuid = settings.store.uuid;
+    if (!uuid) return new Set();
+
     try {
-        const response = await fetch(`${settings.store.api_url}/links`);
+        const response = await fetch(`${settings.store.api_url}/${uuid}/links`);
         if (!response.ok) return new Set();
         const res = (await response.json()) as { type: string; data: Record<string, string>; };
         if (res.type === "success" && res.data) {
@@ -144,6 +147,9 @@ function getValidGifs(favorites: Gif[]): Gif[] {
 
 // Function to send index request
 async function indexFavorites(favorites: Gif[]) {
+    const uuid = settings.store.uuid;
+    if (!uuid) return;
+
     if (pendingIndexRequest) {
         return;
     }
@@ -169,7 +175,7 @@ async function indexFavorites(favorites: Gif[]) {
         for (let i = 0; i < toIndex.length; i++) {
             const gif = toIndex[i];
             try {
-                const response = await fetch(`${settings.store.api_url}/index`, {
+                const response = await fetch(`${settings.store.api_url}/${uuid}/index`, {
                     method: "POST",
                     headers: {
                         "Content-Type": "application/json"
@@ -326,7 +332,12 @@ function IndexingStatsComponent() {
                 setTotalValid(valid.length);
                 setFailedCount(failedLinks.size);
 
-                const response = await fetch(`${settings.store.api_url}/links`);
+                const uuid = settings.store.uuid;
+                if (!uuid) {
+                    setLoading(false);
+                    return;
+                }
+                const response = await fetch(`${settings.store.api_url}/${uuid}/links`);
                 if (!response.ok) {
                     setLoading(false);
                     return;
@@ -421,15 +432,90 @@ function IndexingStatsComponent() {
     );
 }
 
+function generateUuid() {
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        var r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+}
+
+function UuidManagerComponent() {
+    const [uuid, setUuid] = useState(() => settings.store.uuid || "");
+
+    const updateUuid = useCallback((val: string) => {
+        val = val.trim();
+        settings.store.uuid = val;
+        setUuid(val);
+    }, []);
+
+    const generateNew = useCallback(() => {
+        const next = generateUuid();
+        updateUuid(next);
+    }, [updateUuid]);
+
+    const copyToClipboard = useCallback(() => {
+        navigator.clipboard.writeText(uuid);
+    }, [uuid]);
+
+    return (
+        <Forms.FormSection>
+            <Forms.FormTitle tag="h3">Database Sync UUID</Forms.FormTitle>
+            <Forms.FormText>
+                This UUID serves as your unique database key that identifies your indexed GIF embeddings on the backend. Share this UUID across your devices to keep them in sync.
+            </Forms.FormText>
+
+            <div style={{ marginTop: 12 }}>
+                <Flex flexDirection={Flex.Direction.HORIZONTAL} style={{ gap: "0.5rem", alignItems: "stretch" }}>
+                    <div style={{ flex: 1 }}>
+                        <TextInput
+                            value={uuid}
+                            onChange={(val: string) => updateUuid(val)}
+                            placeholder="Enter or generate UUID"
+                        />
+                    </div>
+                    <Button
+                        onClick={copyToClipboard}
+                        size={Button.Sizes.SMALL}
+                        color={Button.Colors.PRIMARY}
+                        style={{ minHeight: "32px" }}
+                    >
+                        Copy
+                    </Button>
+                    <Button
+                        onClick={generateNew}
+                        size={Button.Sizes.SMALL}
+                        color={Button.Colors.PRIMARY}
+                        style={{ minHeight: "32px" }}
+                    >
+                        Generate New
+                    </Button>
+                </Flex>
+            </div>
+
+            <Forms.FormDivider style={{ marginTop: 12 }} />
+        </Forms.FormSection>
+    );
+}
+
 export const settings = definePluginSettings({
     api_url: {
         type: OptionType.STRING,
         description: "API URL",
         default: "http://localhost:6335"
     },
+    uuid: {
+        type: OptionType.STRING,
+        description: "Integration UUID (identifies your database of GIF embeddings)",
+        default: "",
+        hidden: true
+    },
     clip_weights_component: {
         type: OptionType.COMPONENT,
         component: ModelWeightsComponent
+    },
+    uuid_manager_component: {
+        type: OptionType.COMPONENT,
+        component: UuidManagerComponent
     },
     stats_component: {
         type: OptionType.COMPONENT,
@@ -563,6 +649,9 @@ function SearchBar({ instance, SearchBarComponent }: { instance: Instance; Searc
         if (debouncedQuery === "") return;
 
         const performSearch = async () => {
+            const uuid = settings.store.uuid;
+            if (!uuid) return;
+
             const { props } = instance;
 
             // Create new AbortController for this request
@@ -575,7 +664,7 @@ function SearchBar({ instance, SearchBarComponent }: { instance: Instance; Searc
                 ?.firstElementChild?.scrollTo(0, 0);
 
             try {
-                const response = await fetch(`${settings.store.api_url}/search?query=${encodeURIComponent(debouncedQuery)}`, {
+                const response = await fetch(`${settings.store.api_url}/${uuid}/search?query=${encodeURIComponent(debouncedQuery)}`, {
                     signal: abortControllerRef.current.signal
                 });
 

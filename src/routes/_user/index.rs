@@ -1,12 +1,23 @@
 use std::{collections::HashMap, time::Duration};
 
-use axum::{Json, Router, body::Body, extract::State, http::{HeaderValue, Response}, response::IntoResponse, routing::post};
+use axum::{
+    Json, Router,
+    body::Body,
+    extract::{Path, State},
+    http::{HeaderValue, Response},
+    response::IntoResponse,
+    routing::post,
+};
 use brest::Brest;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::{AppState, embedding::EmbeddingError, media::{self, IndexError}};
+use crate::{
+    AppState,
+    embedding::EmbeddingError,
+    media::{self, IndexError},
+};
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/", post(post_handler))
@@ -38,11 +49,14 @@ pub struct Gif {
 
 async fn post_handler(
     State(state): State<AppState>,
+    Path(user): Path<Uuid>,
+
     Json(payload): Json<PostPayload>,
 ) -> Response<Body> {
     let (uuid, providers) = match media::index(
         &payload.link,
         Duration::from_secs(payload.timeout),
+        &user,
         &state.qdrant,
         &state.embedders,
     )
@@ -50,12 +64,21 @@ async fn post_handler(
     {
         Ok(results) => results,
         Err(IndexError::Embedding(EmbeddingError::Ratelimit(retry_after))) => {
-            let mut response = Brest::<(), ()>::fail_status("Please try again later!", StatusCode::TOO_MANY_REQUESTS).into_response();
-            response.headers_mut().insert(reqwest::header::RETRY_AFTER, HeaderValue::from_str(&retry_after).unwrap());
-            return response
+            let mut response = Brest::<(), ()>::fail_status(
+                "Please try again later!",
+                StatusCode::TOO_MANY_REQUESTS,
+            )
+            .into_response();
+            response.headers_mut().insert(
+                reqwest::header::RETRY_AFTER,
+                HeaderValue::from_str(&retry_after).unwrap(),
+            );
+            return response;
         }
-        Err(e) => return  Brest::<(), ()>::error(format!("An error occured: {e:?}")).into_response(),
+        Err(e) => {
+            return Brest::<(), ()>::error(format!("An error occured: {e:?}")).into_response();
+        }
     };
 
-     Brest::<PostResponse, ()>::success(PostResponse { uuid, providers }).into_response()
+    Brest::<PostResponse, ()>::success(PostResponse { uuid, providers }).into_response()
 }

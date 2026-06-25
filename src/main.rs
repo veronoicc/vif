@@ -5,8 +5,8 @@ use eyre::eyre;
 use futures::future::try_join_all;
 use qdrant_client::Qdrant;
 use tokio::net::TcpListener;
-use tracing::debug;
 use tower_http::cors::CorsLayer;
+use tracing::debug;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::{
@@ -70,6 +70,8 @@ async fn main() -> eyre::Result<()> {
         debug!("listening on {addrs:?}");
     }
 
-    let router = routes::router().layer(CorsLayer::permissive()).with_state(AppState { qdrant, embedders });
+    let router = routes::router()
+        .layer(CorsLayer::permissive())
+        .with_state(AppState { qdrant, embedders });
     Ok(axum::serve(listener, router).await?)
 }

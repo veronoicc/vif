@@ -1,10 +1,15 @@
 use std::{collections::HashMap, str::FromStr, sync::Arc, vec};
 
 use qdrant_client::{
-    Qdrant, QdrantError, qdrant::{
-        CollectionExistsRequest, CreateCollectionBuilder, GetPointsBuilder, NamedVectors, PointId, PointStruct, ScrollPointsBuilder, UpsertPointsBuilder, Value, Vectors, VectorsConfigBuilder, value::Kind, vector_output::Vector as VectorOutputVector, vectors::VectorsOptions, vectors_output::VectorsOptions as VectorsOutputOptions,
+    Payload, Qdrant, QdrantError,
+    qdrant::{
+        CollectionExistsRequest, Condition, CreateCollectionBuilder, Filter, GetPointsBuilder, NamedVectors, PointId, PointStruct, ScrollPointsBuilder,
+        SetPayloadPointsBuilder, UpsertPointsBuilder, Value, Vectors, VectorsConfigBuilder,
+        value::Kind, vector_output::Vector as VectorOutputVector, vectors::VectorsOptions,
+        vectors_output::VectorsOptions as VectorsOutputOptions,
     },
 };
+use serde_json::json;
 use uuid::Uuid;
 
 use crate::embedding::Embedder;
@@ -48,7 +53,7 @@ pub async fn initialize(
 pub async fn get_media(
     qdrant: &Qdrant,
     uuid: &Uuid,
-) -> Result<Option<(HashMap<String, Vec<f32>>, String)>, QdrantError> {
+) -> Result<Option<(HashMap<String, Vec<f32>>, String, Vec<Uuid>)>, QdrantError> {
     let response = qdrant
         .get_points(
             GetPointsBuilder::new("media", vec![PointId::from(uuid.to_string())])
@@ -56,7 +61,7 @@ pub async fn get_media(
                 .with_vectors(true),
         )
         .await?;
-    
+
     if let Some(point) = response.result.first() {
         let Some(VectorsOutputOptions::Vectors(output)) = point
             .vectors
@@ -66,22 +71,52 @@ pub async fn get_media(
             return Ok(None);
         };
 
-    let vectors_map = output
-        .vectors
-        .iter()
-        .map(|(name, vector_output)| {
-            (name.clone(), vector_output.data.clone())
-        })
-        .collect::<HashMap<String, Vec<f32>>>();
+        let vectors_map = output
+            .vectors
+            .iter()
+            .map(|(name, vector_output)| (name.clone(), vector_output.data.clone()))
+            .collect::<HashMap<String, Vec<f32>>>();
 
         let Some(link) = point.payload.get("link").map(|v| v.to_string()) else {
             return Ok(None);
         };
 
-        return Ok(Some((vectors_map, link)));
+        let Some(users) = point
+            .payload
+            .get("users")
+            .and_then(|v| v.as_list())
+            .map(|list| {
+                list.iter()
+                    .map(|val| val.as_str().and_then(|s| s.parse::<Uuid>().ok()))
+                    .collect::<Option<Vec<Uuid>>>()
+            })
+            .flatten()
+        else {
+            return Ok(None);
+        };
+
+        return Ok(Some((vectors_map, link, users)));
     }
 
     Ok(None)
+}
+
+pub async fn set_media_users(
+    qdrant: &Qdrant,
+    uuid: &Uuid,
+    users: &[Uuid],
+) -> Result<(), QdrantError> {
+    let payload: Payload = json!({"users": users}).try_into().unwrap();
+
+    qdrant
+        .set_payload(
+            SetPayloadPointsBuilder::new("media", payload)
+                .points_selector(vec![PointId::from(uuid.to_string())])
+                .wait(true),
+        )
+        .await?;
+
+    Ok(())
 }
 
 pub async fn insert_media(
@@ -89,9 +124,15 @@ pub async fn insert_media(
     uuid: &Uuid,
     vectors: &HashMap<String, Vec<f32>>,
     link: &str,
+    user: &Uuid,
 ) -> Result<(), QdrantError> {
+    let users = vec![*user]
+        .into_iter()
+        .map(|uuid| Value::from(uuid.to_string()))
+        .collect::<Vec<_>>();
     let mut payload = HashMap::new();
     payload.insert("link".to_string(), Value::from(link));
+    payload.insert("users".to_string(), users.into());
 
     let mut named_vectors = NamedVectors::default();
     for (name, vector) in vectors {
@@ -185,13 +226,16 @@ pub async fn get_query(
     Ok(None)
 }
 
-pub async fn get_links(qdrant: &Qdrant) -> Result<HashMap<Uuid, String>, QdrantError> {
+pub async fn get_links(user: &Uuid, qdrant: &Qdrant) -> Result<HashMap<Uuid, String>, QdrantError> {
     let mut links = HashMap::new();
     let mut offset = None;
+
+    let filter = Filter::must([Condition::matches("users", user.to_string())]);
 
     loop {
         let mut builder = ScrollPointsBuilder::new("media")
             .with_payload(true)
+            .filter(filter.clone())
             .limit(100);
 
         if let Some(next_offset) = offset {

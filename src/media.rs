@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use qdrant_client::qdrant::value::Kind;
-use qdrant_client::qdrant::{SearchBatchPointsBuilder, SearchPointsBuilder};
+use qdrant_client::qdrant::{Condition, Filter, SearchBatchPointsBuilder, SearchPointsBuilder};
 use qdrant_client::{Qdrant, QdrantError};
 use thiserror::Error;
 use tokio::time::error::Elapsed;
@@ -9,7 +9,7 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::embedding::{Embedder, EmbeddingError};
-use crate::vectors::{get_media, get_query, insert_media, insert_query};
+use crate::vectors::{get_media, get_query, insert_media, insert_query, set_media_users};
 
 const UUID_NAMESPACE: Uuid = Uuid::from_u128(0x6ba7b811_9dad_11d1_80b4_00c04fd430c8);
 
@@ -35,6 +35,7 @@ pub async fn search(
     text: String,
     timeout: Duration,
     limit: u64,
+    user: &Uuid,
     qdrant: &Qdrant,
     embedders: &Vec<Arc<dyn Embedder + Send + Sync>>,
 ) -> Result<HashMap<String, Vec<(String, f32)>>, SearchError> {
@@ -52,12 +53,15 @@ pub async fn search(
         vectors
     };
 
+    let filter = Filter::must([Condition::matches("users", user.to_string())]);
+
     let (names, search_points): (Vec<String>, Vec<_>) = vectors
         .into_iter()
         .map(|(name, vector)| {
             let point = SearchPointsBuilder::new("media", vector, limit)
                 .vector_name(&name)
                 .with_payload(true)
+                .filter(filter.clone())
                 .build();
             (name, point)
         })
@@ -117,6 +121,7 @@ impl From<Elapsed> for IndexError {
 pub async fn index(
     media: &str,
     timeout: Duration,
+    user: &Uuid,
     qdrant: &Qdrant,
     embedders: &Vec<Arc<dyn Embedder + Send + Sync>>,
 ) -> Result<(Uuid, HashMap<String, Vec<f32>>), IndexError> {
@@ -126,7 +131,9 @@ pub async fn index(
         &strip_url_parameters(url.clone()).into_bytes(),
     );
 
-    if let Some((vectors, _)) = get_media(&qdrant, &uuid).await? {
+    if let Some((vectors, _, mut users)) = get_media(&qdrant, &uuid).await? {
+        users.push(*user);
+        set_media_users(&qdrant, &uuid, &users).await?;
         Ok((uuid, vectors))
     } else {
         let mut vectors = HashMap::new();
@@ -134,7 +141,7 @@ pub async fn index(
             let vector = tokio::time::timeout(timeout, embedder.embed_media(media)).await??;
             vectors.insert(embedder.name(), vector);
         }
-        insert_media(&qdrant, &uuid, &vectors, &url.to_string()).await?;
+        insert_media(&qdrant, &uuid, &vectors, &url.to_string(), &user).await?;
         Ok((uuid, vectors))
     }
 }

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use axum::extract::Path;
 use axum::{Router, extract::State, routing::get};
 use brest::Brest;
 use uuid::Uuid;
@@ -11,8 +12,11 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/", get(get_handler))
 }
 
-async fn get_handler(State(state): State<AppState>) -> Brest<HashMap<Uuid, String>> {
-    let links = match get_links(&state.qdrant).await {
+async fn get_handler(
+    State(state): State<AppState>,
+    Path(user): Path<Uuid>,
+) -> Brest<HashMap<Uuid, String>> {
+    let links = match get_links(&user, &state.qdrant).await {
         Ok(results) => results,
         Err(e) => return Brest::error(format!("An error occured: {e:?}")),
     };

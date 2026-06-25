@@ -1,13 +1,23 @@
 use std::{collections::HashMap, time::Duration};
 
 use axum::{
-    Router, body::Body, extract::{Query, State}, http::{HeaderValue, Response}, response::IntoResponse, routing::get,
+    Router,
+    body::Body,
+    extract::{Path, Query, State},
+    http::{HeaderValue, Response},
+    response::IntoResponse,
+    routing::get,
 };
 use brest::Brest;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
-use crate::{AppState, embedding::EmbeddingError, media::{self, SearchError}};
+use crate::{
+    AppState,
+    embedding::EmbeddingError,
+    media::{self, SearchError},
+};
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/", get(get_handler))
@@ -44,12 +54,14 @@ pub struct Gif {
 
 async fn get_handler(
     State(state): State<AppState>,
+    Path(user): Path<Uuid>,
     Query(payload): Query<GetPayload>,
 ) -> Response<Body> {
     let results = match media::search(
         payload.query,
         Duration::from_secs(payload.timeout),
         payload.amount,
+        &user,
         &state.qdrant,
         &state.embedders,
     )
@@ -57,11 +69,20 @@ async fn get_handler(
     {
         Ok(results) => results,
         Err(SearchError::Embedding(EmbeddingError::Ratelimit(retry_after))) => {
-            let mut response = Brest::<(), ()>::fail_status("Please try again later!", StatusCode::TOO_MANY_REQUESTS).into_response();
-            response.headers_mut().insert(reqwest::header::RETRY_AFTER, HeaderValue::from_str(&retry_after).unwrap());
-            return response
+            let mut response = Brest::<(), ()>::fail_status(
+                "Please try again later!",
+                StatusCode::TOO_MANY_REQUESTS,
+            )
+            .into_response();
+            response.headers_mut().insert(
+                reqwest::header::RETRY_AFTER,
+                HeaderValue::from_str(&retry_after).unwrap(),
+            );
+            return response;
         }
-        Err(e) => return Brest::<(), ()>::error(format!("An error occured: {e:?}")).into_response(),
+        Err(e) => {
+            return Brest::<(), ()>::error(format!("An error occured: {e:?}")).into_response();
+        }
     };
 
     Brest::<GetResponse, ()>::success(GetResponse {
@@ -77,5 +98,6 @@ async fn get_handler(
                 )
             })
             .collect::<HashMap<_, _>>(),
-    }).into_response()
+    })
+    .into_response()
 }
