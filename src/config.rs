@@ -21,7 +21,7 @@ pub fn base_figment() -> Figment {
         .admerge(providers::Toml::file(
             std::env::var("CONFIG").unwrap_or_else(|_| "config.toml".into()),
         ))
-        .admerge(providers::Env::prefixed("VIF_").split("_"))
+        .admerge(providers::Env::prefixed("VIF_").split("__"))
 }
 
 #[derive(Debug, Deserialize, Clone)]
